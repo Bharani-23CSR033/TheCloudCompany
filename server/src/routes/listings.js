@@ -3,7 +3,9 @@ import mongoose from 'mongoose'
 import Listing, { categories, conditions } from '../models/Listing.js'
 import Bid from '../models/Bid.js'
 import { requireAuth } from '../middleware/auth.js'
+import { optionalAuth } from '../middleware/optionalAuth.js'
 import { uploadImages } from '../middleware/upload.js'
+import { processExpiredAuctions } from '../services/auctionCloser.js'
 
 const router = Router()
 const imageUrl = (req, file) => `${req.protocol}://${req.get('host')}/uploads/${file.filename}`
@@ -24,7 +26,7 @@ const serializeBid = (bid) => ({
   createdAt: bid.createdAt,
 })
 
-const serialize = (listing, { includeBids = false } = {}) => {
+const serialize = (listing, { includeBids = false, includeLifecycle = false } = {}) => {
   const item = listing.toObject()
   item.seller = item.seller && typeof item.seller === 'object' && item.seller.name
     ? { name: item.seller.name }
@@ -35,6 +37,15 @@ const serialize = (listing, { includeBids = false } = {}) => {
   item.bidCount = bids.length
   if (includeBids) item.bids = bids.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(serializeBid)
   else delete item.bids
+  if (!includeLifecycle) {
+    delete item.provisionalWinner
+    delete item.winningBid
+    delete item.sellerDecision
+    delete item.sellerDecisionAt
+    delete item.reservationStatus
+    delete item.handover
+    delete item.sellerCancellation
+  }
   return item
 }
 
@@ -175,11 +186,81 @@ router.post('/:id/bids', requireAuth, async (req, res, next) => {
   }
 })
 
-router.get('/:id', async (req, res, next) => {
+router.get('/decisions', requireAuth, async (req, res, next) => {
   try {
-    const listing = await Listing.findById(req.params.id).populate('seller', 'name').populate({ path: 'bids', populate: { path: 'bidder', select: 'name' } })
+    await processExpiredAuctions()
+    const listings = await Listing.find({ seller: req.student._id, status: 'awaiting_decision' }).populate('provisionalWinner', 'name').populate('winningBid')
+    res.json({ listings: listings.map((listing) => serialize(listing, { includeLifecycle: true })) })
+  } catch (error) { next(error) }
+})
+
+router.get('/my-sales', requireAuth, async (req, res, next) => {
+  try {
+    const listings = await Listing.find({ $or: [{ seller: req.student._id }, { provisionalWinner: req.student._id }], status: { $in: ['awaiting_decision', 'reserved', 'completed', 'failed_pickup', 'seller_cancelled', 'rejected', 'unsold'] } }).populate('seller', 'name').populate('provisionalWinner', 'name').populate('winningBid')
+    res.json({ listings: listings.map((listing) => serialize(listing, { includeLifecycle: true })) })
+  } catch (error) { next(error) }
+})
+
+router.get('/:id', optionalAuth, async (req, res, next) => {
+  try {
+    const listing = await Listing.findById(req.params.id).populate('seller', 'name').populate('provisionalWinner', 'name').populate('winningBid').populate({ path: 'bids', populate: { path: 'bidder', select: 'name' } })
     if (!listing) return res.status(404).json({ message: 'Listing not found.' })
-    res.json({ listing: serialize(listing, { includeBids: true }) })
+    const canViewLifecycle = req.student && (listing.seller._id.equals(req.student._id) || listing.provisionalWinner?._id.equals(req.student._id))
+    res.json({ listing: serialize(listing, { includeBids: true, includeLifecycle: canViewLifecycle }) })
+  } catch (error) { next(error) }
+})
+
+router.post('/:id/decision', requireAuth, async (req, res, next) => {
+  try {
+    const { decision } = req.body
+    if (!['approve', 'reject'].includes(decision)) return res.status(400).json({ message: 'Decision must be approve or reject.' })
+    const listing = await Listing.findOneAndUpdate(
+      { _id: req.params.id, seller: req.student._id, status: 'awaiting_decision' },
+      { $set: { sellerDecision: decision === 'approve' ? 'approved' : 'rejected', sellerDecisionAt: new Date(), status: decision === 'approve' ? 'reserved' : 'rejected', reservationStatus: decision === 'approve' ? 'reserved' : 'released' } },
+      { new: true },
+    ).populate('provisionalWinner', 'name').populate('winningBid')
+    if (!listing) return res.status(400).json({ message: 'Auction was not found or is no longer awaiting a seller decision.' })
+    res.json({ listing: serialize(listing, { includeLifecycle: true }) })
+  } catch (error) { next(error) }
+})
+
+const findParticipant = async (id, studentId) => Listing.findOne({ _id: id, $or: [{ seller: studentId }, { provisionalWinner: studentId }] }).populate('seller', 'name').populate('provisionalWinner', 'name').populate('winningBid')
+
+router.post('/:id/handover/confirm', requireAuth, async (req, res, next) => {
+  try {
+    const listing = await findParticipant(req.params.id, req.student._id)
+    if (!listing) return res.status(404).json({ message: 'Sale not found or you are not a participant.' })
+    if (listing.status !== 'reserved') return res.status(400).json({ message: 'Only reserved sales can be confirmed.' })
+    const isSeller = listing.seller._id.equals(req.student._id)
+    if (isSeller) { listing.handover.sellerConfirmed = true; listing.handover.sellerConfirmedAt = new Date() }
+    else { listing.handover.buyerConfirmed = true; listing.handover.buyerConfirmedAt = new Date() }
+    if (listing.handover.sellerConfirmed && listing.handover.buyerConfirmed) listing.status = 'completed'
+    await listing.save()
+    res.json({ listing: serialize(listing, { includeLifecycle: true }) })
+  } catch (error) { next(error) }
+})
+
+router.post('/:id/handover/fail', requireAuth, async (req, res, next) => {
+  try {
+    const listing = await findParticipant(req.params.id, req.student._id)
+    if (!listing) return res.status(404).json({ message: 'Sale not found or you are not a participant.' })
+    if (listing.status !== 'reserved') return res.status(400).json({ message: 'Only reserved sales can be marked as failed pickup.' })
+    if (!req.body.reason?.trim()) return res.status(400).json({ message: 'A failed pickup reason is required.' })
+    listing.status = 'failed_pickup'; listing.reservationStatus = 'released'; listing.handover.failedAt = new Date(); listing.handover.failedBy = req.student._id; listing.handover.failedReason = req.body.reason.trim()
+    await listing.save()
+    res.json({ listing: serialize(listing, { includeLifecycle: true }) })
+  } catch (error) { next(error) }
+})
+
+router.post('/:id/seller-cancel', requireAuth, async (req, res, next) => {
+  try {
+    const listing = await Listing.findOne({ _id: req.params.id, seller: req.student._id }).populate('provisionalWinner', 'name').populate('winningBid')
+    if (!listing) return res.status(404).json({ message: 'Sale not found or you are not the seller.' })
+    if (listing.status !== 'reserved') return res.status(400).json({ message: 'Only reserved sales can be cancelled by the seller.' })
+    if (!req.body.reason?.trim()) return res.status(400).json({ message: 'A cancellation reason is required.' })
+    listing.status = 'seller_cancelled'; listing.reservationStatus = 'released'; listing.sellerCancellation = { reason: req.body.reason.trim(), cancelledAt: new Date() }
+    await listing.save()
+    res.json({ listing: serialize(listing, { includeLifecycle: true }) })
   } catch (error) { next(error) }
 })
 

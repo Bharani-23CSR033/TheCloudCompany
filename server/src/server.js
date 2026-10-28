@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { connectDatabase } from './config/db.js'
 import authRoutes from './routes/auth.js'
 import listingRoutes from './routes/listings.js'
+import { startAuctionCloser } from './services/auctionCloser.js'
 
 const app = express()
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }))
@@ -25,5 +26,8 @@ app.use((error, req, res, next) => {
 })
 
 const port = process.env.PORT || 5000
-if (process.env.NODE_ENV !== 'test') connectDatabase().then(() => app.listen(port, () => console.log(`API listening on port ${port}`))).catch((error) => { console.error(`Database connection failed: ${error.message}`); process.exit(1) })
+if (process.env.NODE_ENV !== 'test') connectDatabase().then(() => {
+  app.listen(port, () => console.log(`API listening on port ${port}`))
+  startAuctionCloser()
+}).catch((error) => { console.error(`Database connection failed: ${error.message}`); process.exit(1) })
 export default app

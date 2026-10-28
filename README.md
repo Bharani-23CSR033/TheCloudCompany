@@ -109,3 +109,30 @@ mongosh "mongodb://127.0.0.1:27017/admin" --eval "rs.initiate({_id:'rs0',members
 ```
 
 Then restart the API with `npm run dev`. Do not delete the MongoDB data directory or run `rs.initiate` more than once.
+
+## Phase 5 auction lifecycle
+
+The server-side closing worker runs when the API starts and every 30 seconds. It only changes `active` listings whose stored `closingAt` has passed, so running it repeatedly is idempotent:
+
+```text
+active -> awaiting_decision       when valid bids exist
+active -> unsold                  when no valid bids exist
+awaiting_decision -> reserved    seller approves the provisional winner
+awaiting_decision -> rejected    seller rejects the provisional price
+reserved -> completed             both seller and buyer confirm handover
+reserved -> failed_pickup         either participant records failed pickup
+reserved -> seller_cancelled      seller records a cancellation reason
+```
+
+Late bids are rejected by the bid endpoint even before the scheduled worker runs. A completed, rejected, failed, seller-cancelled, or unsold listing cannot return to an active sale state.
+
+Phase 5 endpoints:
+
+- `GET /api/listings/decisions` — authenticated seller's auctions awaiting decision
+- `POST /api/listings/:id/decision` with `{ "decision": "approve" }` or `{ "decision": "reject" }`
+- `GET /api/listings/my-sales` — authenticated seller/winner lifecycle view
+- `POST /api/listings/:id/handover/confirm` — seller or confirmed buyer confirms pickup
+- `POST /api/listings/:id/handover/fail` with `{ "reason": "..." }`
+- `POST /api/listings/:id/seller-cancel` with `{ "reason": "..." }`
+
+Winner and handover details are returned only to the listing seller or confirmed winner. Public listing APIs do not expose private account information.
