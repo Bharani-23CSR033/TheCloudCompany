@@ -171,3 +171,23 @@ Saved-search endpoints:
 - `DELETE /api/saved-searches/:id`
 
 All endpoints require authentication and scope records to the verified JWT user. A saved search must include at least one criterion; category, condition, and non-negative price values are validated. The saved-search page supports editing, deletion, and rerunning a search. The marketplace page includes **Save search** for the current filters. Alerts are persisted and appear through the existing notification polling system, including when a student was offline. Browser notifications still require the existing in-app permission and polling behavior; they do not work while the application is completely closed.
+
+## AI Assistant
+
+The authenticated **AI Assistant** page searches real active listings using a natural-language request. It supports item keywords, categories, conditions, maximum budgets, and current auction availability. Results contain only public listing information and link to the normal listing detail page.
+
+Endpoint:
+
+- `POST /api/ai-assistant/chat` with `{ "message": "...", "history": [] }`
+
+The endpoint requires the student's JWT, limits messages to 500 characters, limits conversation context to 10 short messages, and rate-limits each student to 20 requests per minute. The assistant is recommendation-only and never places bids. Students must use the existing listing page and bidding API, which continues to enforce auction status, seller restrictions, closing time, and minimum increments.
+
+No AI API key is required. Without provider configuration, the server uses a transparent local filter/parser fallback and searches MongoDB directly. An optional OpenAI-compatible provider can be configured only on the server:
+
+```env
+AI_API_URL=https://your-provider.example/v1/chat/completions
+AI_API_KEY=replace-with-a-server-side-key
+AI_MODEL=gpt-4o-mini
+```
+
+Never put `AI_API_KEY` in `client/.env`, expose it to Vite, commit it, or return it from an API response. Provider output is used only to explain results already retrieved by the trusted backend; it cannot execute database queries or create bids. If the provider is unavailable, the local fallback response remains available.

@@ -9,6 +9,7 @@ import listingRoutes from './routes/listings.js'
 import { startAuctionCloser } from './services/auctionCloser.js'
 import notificationRoutes from './routes/notifications.js'
 import savedSearchRoutes from './routes/savedSearches.js'
+import aiAssistantRoutes from './routes/aiAssistant.js'
 
 const app = express()
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }))
@@ -19,6 +20,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/listings', listingRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/saved-searches', savedSearchRoutes)
+app.use('/api/ai-assistant', aiAssistantRoutes)
 app.use((req, res) => res.status(404).json({ message: 'Route not found.' }))
 app.use((error, req, res, next) => {
   console.error(error)
