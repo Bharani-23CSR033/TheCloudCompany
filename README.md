@@ -158,3 +158,16 @@ The server creates idempotent notifications for outbids, auction closure, provis
 5. Open the bell to mark notifications read and optionally enable browser notifications.
 
 Known limitation: live MongoDB bidding and lifecycle integration requires MongoDB replica-set mode as documented above. The frontend build and backend syntax checks can run without a database, but end-to-end notification delivery requires a configured MongoDB connection.
+
+## Saved searches and listing alerts
+
+Authenticated students can save keyword, category, condition, and price filters. When a newly published listing matches all specified criteria, the owner receives one persistent `saved_search_match` notification. The seller is never notified by their own saved search, and the unique event key prevents duplicate alerts if listing processing is retried.
+
+Saved-search endpoints:
+
+- `POST /api/saved-searches`
+- `GET /api/saved-searches`
+- `PUT /api/saved-searches/:id`
+- `DELETE /api/saved-searches/:id`
+
+All endpoints require authentication and scope records to the verified JWT user. A saved search must include at least one criterion; category, condition, and non-negative price values are validated. The saved-search page supports editing, deletion, and rerunning a search. The marketplace page includes **Save search** for the current filters. Alerts are persisted and appear through the existing notification polling system, including when a student was offline. Browser notifications still require the existing in-app permission and polling behavior; they do not work while the application is completely closed.

@@ -7,6 +7,7 @@ import { optionalAuth } from '../middleware/optionalAuth.js'
 import { uploadImages } from '../middleware/upload.js'
 import { processExpiredAuctions } from '../services/auctionCloser.js'
 import { createNotification } from '../services/notifications.js'
+import { notifyMatchingSavedSearches } from '../services/listingAlerts.js'
 
 const router = Router()
 const imageUrl = (req, file) => `${req.protocol}://${req.get('host')}/uploads/${file.filename}`
@@ -85,6 +86,7 @@ router.post('/', requireAuth, handleUpload, async (req, res, next) => {
       minimumBidIncrement: parseNumber(req.body.minimumBidIncrement), closingAt: new Date(req.body.closingAt),
       seller: req.student._id, images: req.files.map((file) => imageUrl(req, file)),
     })
+    await notifyMatchingSavedSearches(listing)
     res.status(201).json({ listing: serialize(listing) })
   } catch (error) { next(error) }
 })
