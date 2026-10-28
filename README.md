@@ -1,6 +1,6 @@
 # CampusAuction
 
-A Phase 3 MERN campus marketplace for discovering auctions within a college community. Bidding is intentionally not implemented yet.
+A Phase 4 MERN campus marketplace for discovering auctions and placing secure bids within a college community.
 
 ## Requirements
 
@@ -51,6 +51,7 @@ Open the Vite URL shown in the terminal. The API health check is available at `h
 - `GET /api/listings?mine=true` (authenticated seller listings)
 - `GET /api/listings/:id`
 - `GET /api/listings/:id/bids` (public, read-only bid history)
+- `POST /api/listings/:id/bids` (authenticated; JSON body `{ "amount": 123.45 }`)
 - `PUT /api/listings/:id` (authenticated owner; multipart form)
 - `DELETE /api/listings/:id` (authenticated owner; records `cancelled` status instead of deleting)
 
@@ -58,7 +59,7 @@ Listing fields are `title`, `category`, `description`, `condition`, `startingPri
 
 Uploaded images are stored as files under `server/uploads/` and only their URL paths are stored in MongoDB. JPEG, PNG, and WebP files are accepted, with a maximum of 6 images and 5 MB per image. The upload directory is served at `/uploads/`; generated uploads are ignored by Git.
 
-Passwords are hashed with bcrypt and are never returned by the API. Bidding and automatic bidding remain intentionally deferred to a later phase.
+Passwords are hashed with bcrypt and are never returned by the API. Automatic bidding remains intentionally deferred to a later phase.
 
 ## Browsing query parameters
 
@@ -74,3 +75,37 @@ Passwords are hashed with bcrypt and are never returned by the API. Bidding and 
 - `limit`: results per page from 1 to 50 (default `12`)
 
 The response includes `pagination` metadata. Public listing responses expose only the seller's display name, never email, password, or authentication data. Detail responses include public bid history and `currentPrice`; with no valid bids, `currentPrice` equals `startingPrice`. The browser countdown is informational only—the server's stored closing timestamp remains authoritative.
+
+## Bidding
+
+Bid placement requires a JWT bearer token. The server derives the bidder from that token and enforces the starting price, minimum increment, seller restriction, auction status, and stored closing timestamp. Accepted bids are written together with the listing's leading price in a MongoDB transaction so competing requests cannot both pass validation against the same outdated price.
+
+Transactions require MongoDB replica-set support. MongoDB Atlas supports this by default; for local development, run MongoDB as a single-node replica set and configure the client URI with the replica-set name, such as `?replicaSet=rs0`.
+
+If the API reports `Bidding requires MongoDB replica-set mode`, the local Windows service is still running standalone. Add the following to the existing `C:\Program Files\MongoDB\Server\9.0\bin\mongod.cfg` without changing `storage.dbPath`:
+
+```yaml
+replication:
+  replSetName: rs0
+```
+
+In an elevated PowerShell, restart the existing service:
+
+```powershell
+Stop-Service MongoDB
+Start-Service MongoDB
+```
+
+Update `server/.env`:
+
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017/campus-auction?replicaSet=rs0
+```
+
+This preserves the existing database files. `mongosh` is not installed in the current environment. After restarting MongoDB, install MongoDB Shell from the official MongoDB package or use a MongoDB Shell available on PATH, then initialize the single-node replica set once:
+
+```powershell
+mongosh "mongodb://127.0.0.1:27017/admin" --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})"
+```
+
+Then restart the API with `npm run dev`. Do not delete the MongoDB data directory or run `rs.initiate` more than once.

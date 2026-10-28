@@ -1,8 +1,9 @@
 import { Router } from 'express'
+import mongoose from 'mongoose'
 import Listing, { categories, conditions } from '../models/Listing.js'
+import Bid from '../models/Bid.js'
 import { requireAuth } from '../middleware/auth.js'
 import { uploadImages } from '../middleware/upload.js'
-import '../models/Bid.js'
 
 const router = Router()
 const imageUrl = (req, file) => `${req.protocol}://${req.get('host')}/uploads/${file.filename}`
@@ -11,7 +12,10 @@ const parseNumber = (value) => typeof value === 'number' ? value : Number(value)
 const isValidDate = (value) => Number.isFinite(new Date(value).getTime())
 const isOpen = (listing) => listing.status === 'active' && isValidDate(listing.closingAt) && new Date(listing.closingAt) > new Date()
 const validBids = (listing) => (listing.bids || []).filter((bid) => bid.valid !== false && Number.isFinite(bid.amount) && bid.amount >= listing.startingPrice)
-const currentPrice = (listing) => validBids(listing).reduce((highest, bid) => Math.max(highest, bid.amount), listing.startingPrice)
+const currentPrice = (listing) => {
+  const bids = validBids(listing)
+  return bids.length ? bids.reduce((highest, bid) => Math.max(highest, bid.amount), listing.startingPrice) : (Number.isFinite(listing.currentPrice) ? listing.currentPrice : listing.startingPrice)
+}
 
 const serializeBid = (bid) => ({
   id: bid._id,
@@ -65,6 +69,7 @@ router.post('/', requireAuth, handleUpload, async (req, res, next) => {
     const listing = await Listing.create({
       title: req.body.title, category: req.body.category, description: req.body.description,
       condition: req.body.condition, startingPrice: parseNumber(req.body.startingPrice),
+      currentPrice: parseNumber(req.body.startingPrice),
       minimumBidIncrement: parseNumber(req.body.minimumBidIncrement), closingAt: new Date(req.body.closingAt),
       seller: req.student._id, images: req.files.map((file) => imageUrl(req, file)),
     })
@@ -92,7 +97,7 @@ router.get('/', authenticateIfMine, async (req, res, next) => {
     if (closingSoon === 'true') query.closingAt = { $gt: new Date(), $lte: new Date(Date.now() + 24 * 60 * 60 * 1000) }
     if (minimum !== undefined || maximum !== undefined) query.startingPrice = { ...(minimum !== undefined && { $gte: minimum }), ...(maximum !== undefined && { $lte: maximum }) }
 
-    const sortMap = { newest: { createdAt: -1 }, closingSoon: { closingAt: 1 }, lowestPrice: { startingPrice: 1, createdAt: -1 } }
+    const sortMap = { newest: { createdAt: -1 }, closingSoon: { closingAt: 1 }, lowestPrice: { currentPrice: 1, startingPrice: 1, createdAt: -1 } }
     const [listings, total] = await Promise.all([
       Listing.find(query).populate('seller', 'name').populate({ path: 'bids', populate: { path: 'bidder', select: 'name' } }).sort(sortMap[sort]).skip((page - 1) * limit).limit(limit),
       Listing.countDocuments(query),
@@ -107,6 +112,67 @@ router.get('/:id/bids', async (req, res, next) => {
     if (!listing) return res.status(404).json({ message: 'Listing not found.' })
     res.json({ bids: validBids(listing).map(serializeBid), currentPrice: currentPrice(listing) })
   } catch (error) { next(error) }
+})
+
+router.post('/:id/bids', requireAuth, async (req, res, next) => {
+  const amount = parseNumber(req.body?.amount)
+  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: 'Bid amount must be greater than zero.' })
+  let session
+  try {
+    session = await mongoose.startSession()
+    let acceptedBid
+    await session.withTransaction(async () => {
+      const listing = await Listing.findById(req.params.id).session(session)
+      if (!listing) {
+        const error = new Error('Listing not found.')
+        error.status = 404
+        throw error
+      }
+      if (listing.seller.equals(req.student._id)) {
+        const error = new Error('You cannot bid on your own listing.')
+        error.status = 403
+        throw error
+      }
+      if (!isOpen(listing)) {
+        const error = new Error(listing.status === 'cancelled' ? 'This auction has been cancelled.' : 'This auction is closed and no longer accepts bids.')
+        error.status = 400
+        throw error
+      }
+      const previousPrice = currentPrice(listing)
+      const firstBid = listing.bids.length === 0
+      const minimum = firstBid ? listing.startingPrice : previousPrice + listing.minimumBidIncrement
+      if (amount < minimum) {
+        const error = new Error(`Bid must be at least ₹${minimum.toFixed(2)}.`)
+        error.status = 400
+        throw error
+      }
+      const bidId = new mongoose.Types.ObjectId()
+      const priceCondition = firstBid && listing.currentPrice === undefined
+        ? { $or: [{ currentPrice: { $exists: false } }, { currentPrice: null }] }
+        : { currentPrice: previousPrice }
+      const updated = await Listing.findOneAndUpdate(
+        { _id: listing._id, status: 'active', closingAt: { $gt: new Date() }, seller: { $ne: req.student._id }, ...priceCondition },
+        { $set: { currentPrice: amount }, $push: { bids: bidId } },
+        { new: true, session },
+      )
+      if (!updated) {
+        const error = new Error('This auction changed while your bid was being placed. Refresh and try again.')
+        error.status = 409
+        throw error
+      }
+      const [bid] = await Bid.create([{ _id: bidId, listing: listing._id, bidder: req.student._id, amount }], { session })
+      acceptedBid = bid
+    })
+    res.status(201).json({ bid: serializeBid({ ...acceptedBid.toObject(), bidder: { name: req.student.name } }), currentPrice: amount })
+  } catch (error) {
+    if (error.code === 20 || error.codeName === 'IllegalOperation') {
+      error.status = 503
+      error.message = 'Bidding requires MongoDB replica-set mode. Configure the local MongoDB server as a single-node replica set and restart the API.'
+    }
+    next(error)
+  } finally {
+    if (session) await session.endSession()
+  }
 })
 
 router.get('/:id', async (req, res, next) => {
@@ -125,7 +191,8 @@ router.put('/:id', requireAuth, handleUpload, async (req, res, next) => {
     if (listing.bids.length) return res.status(400).json({ message: 'This listing cannot be edited because it already has bids.' })
     const error = validateFields(req.body)
     if (error) return res.status(400).json({ message: error })
-    Object.assign(listing, { title: req.body.title, category: req.body.category, description: req.body.description, condition: req.body.condition, startingPrice: parseNumber(req.body.startingPrice), minimumBidIncrement: parseNumber(req.body.minimumBidIncrement), closingAt: new Date(req.body.closingAt) })
+    const startingPrice = parseNumber(req.body.startingPrice)
+    Object.assign(listing, { title: req.body.title, category: req.body.category, description: req.body.description, condition: req.body.condition, startingPrice, currentPrice: listing.bids.length ? listing.currentPrice : startingPrice, minimumBidIncrement: parseNumber(req.body.minimumBidIncrement), closingAt: new Date(req.body.closingAt) })
     if (req.files?.length) listing.images = req.files.map((file) => imageUrl(req, file))
     await listing.save()
     res.json({ listing: serialize(listing) })

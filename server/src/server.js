@@ -20,6 +20,7 @@ app.use((error, req, res, next) => {
   if (error.name === 'CastError') return res.status(400).json({ message: 'Invalid listing ID.' })
   if (error.name === 'ValidationError') return res.status(400).json({ message: Object.values(error.errors).map((item) => item.message).join(' ') })
   if (error.code === 11000) return res.status(409).json({ message: 'A listing with these details already exists.' })
+  if (error.code === 20 || error.codeName === 'IllegalOperation') return res.status(503).json({ message: error.message || 'MongoDB replica-set mode is required for bidding.' })
   res.status(error.status || 500).json({ message: 'Something went wrong on the server.' })
 })
 

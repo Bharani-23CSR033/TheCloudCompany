@@ -11,6 +11,7 @@ const listingSchema = new mongoose.Schema({
   images: { type: [String], required: true, validate: [(images) => images.length > 0 && images.length <= 6, 'Add between 1 and 6 item photos.'] },
   startingPrice: { type: Number, required: true, min: 0.01 },
   minimumBidIncrement: { type: Number, required: true, min: 0.01 },
+  currentPrice: { type: Number, min: 0.01 },
   closingAt: { type: Date, required: true, validate: { validator: (value) => value > new Date(), message: 'Auction closing time must be in the future.' } },
   seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   status: { type: String, enum: ['active', 'cancelled', 'closed'], default: 'active', index: true },
