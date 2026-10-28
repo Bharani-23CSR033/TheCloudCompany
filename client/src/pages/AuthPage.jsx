@@ -1,0 +1,10 @@
+import { Link, useNavigate } from 'react-router-dom'
+import { useState } from 'react'
+import { authenticate } from '../services/authService'
+import ErrorMessage from '../components/common/ErrorMessage'
+
+export default function AuthPage({ mode }) {
+  const isRegister = mode === 'register'; const navigate = useNavigate(); const [form, setForm] = useState({ name: '', email: '', password: '' }); const [error, setError] = useState(''); const [loading, setLoading] = useState(false)
+  const submit = async (event) => { event.preventDefault(); setError(''); setLoading(true); try { await authenticate(mode, form); navigate('/listings') } catch (err) { setError(err.response?.data?.message || 'Something went wrong. Please try again.') } finally { setLoading(false) } }
+  return <div className="auth-page container"><div className="auth-card"><span className="eyebrow">{isRegister ? 'JOIN THE COMMUNITY' : 'WELCOME BACK'}</span><h1>{isRegister ? 'Create your account' : 'Sign in to CampusAuction'}</h1><p className="text-muted mb-4">{isRegister ? 'Use your college email to get started.' : 'Your campus marketplace is waiting.'}</p><ErrorMessage message={error} /><form onSubmit={submit}>{isRegister && <label className="form-label">Full name<input className="form-control" required minLength="2" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>}<label className="form-label">Email address<input type="email" className="form-control" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label><label className="form-label">Password<input type="password" className="form-control" required minLength="6" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label><button className="btn btn-dark w-100 py-2 mt-2" disabled={loading}>{loading ? 'Please wait...' : isRegister ? 'Create account' : 'Sign in'}</button></form><p className="auth-switch">{isRegister ? 'Already a member?' : 'New to campus marketplace?'} <Link to={isRegister ? '/login' : '/register'}>{isRegister ? 'Sign in' : 'Create an account'}</Link></p></div></div>
+}
