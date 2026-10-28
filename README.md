@@ -1,6 +1,6 @@
 # CampusAuction
 
-A Phase 1 MERN campus marketplace for buying and selling items within a college community.
+A Phase 2 MERN campus marketplace for managing item listings within a college community. Bidding is intentionally not implemented yet.
 
 ## Requirements
 
@@ -11,21 +11,21 @@ A Phase 1 MERN campus marketplace for buying and selling items within a college 
 
 From the project root, install each workspace:
 
-```bash
+```powershell
 cd server
 npm install
-copy .env.example .env
+Copy-Item .env.example .env
 
 cd ..\client
 npm install
-copy .env.example .env
+Copy-Item .env.example .env
 ```
 
 Configure `server/.env` with `MONGODB_URI`, a strong `JWT_SECRET`, `PORT` (normally `5000`), and `CLIENT_URL` (normally `http://localhost:5173`). Configure `client/.env` with `VITE_API_URL=http://localhost:5000/api`.
 
 Run two VS Code terminals:
 
-```bash
+```powershell
 # Terminal 1
 cd server
 npm run dev
@@ -37,11 +37,24 @@ npm run dev
 
 Open the Vite URL shown in the terminal. The API health check is available at `http://localhost:5000/api/health`.
 
-## Phase 1 API
+## Authentication API
 
 - `GET /api/health`
-- `POST /api/auth/register` with `{ "name", "email", "password" }`
-- `POST /api/auth/login` with `{ "email", "password" }`
-- `GET /api/auth/profile` with `Authorization: Bearer <token>`
+- `POST /api/auth/register` with name, email, and password JSON fields
+- `POST /api/auth/login` with email and password JSON fields
+- `GET /api/auth/profile` with an `Authorization` bearer header
 
-Passwords are hashed with bcrypt and are never returned by the API. Bidding, listing creation, and auction functionality are intentionally deferred to Phase 2.
+## Phase 2 listing API
+
+- `POST /api/listings` (authenticated multipart form; use repeated `images` fields)
+- `GET /api/listings` (public active listings; add `?category=Books` to filter)
+- `GET /api/listings?mine=true` (authenticated seller listings)
+- `GET /api/listings/:id`
+- `PUT /api/listings/:id` (authenticated owner; multipart form)
+- `DELETE /api/listings/:id` (authenticated owner; records `cancelled` status instead of deleting)
+
+Listing fields are `title`, `category`, `description`, `condition`, `startingPrice`, `minimumBidIncrement`, `closingAt`, and one or more `images`. Categories are Cycle, Calculator, Books, Electronics, and Other. Conditions are New, Like New, Good, and Fair.
+
+Uploaded images are stored as files under `server/uploads/` and only their URL paths are stored in MongoDB. JPEG, PNG, and WebP files are accepted, with a maximum of 6 images and 5 MB per image. The upload directory is served at `/uploads/`; generated uploads are ignored by Git.
+
+Passwords are hashed with bcrypt and are never returned by the API. Bidding and automatic bidding remain intentionally deferred to a later phase.
