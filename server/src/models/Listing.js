@@ -12,7 +12,16 @@ const listingSchema = new mongoose.Schema({
   startingPrice: { type: Number, required: true, min: 0.01 },
   minimumBidIncrement: { type: Number, required: true, min: 0.01 },
   currentPrice: { type: Number, min: 0.01 },
-  closingAt: { type: Date, required: true, validate: { validator: (value) => value > new Date(), message: 'Auction closing time must be in the future.' } },
+  closingAt: {
+    type: Date,
+    required: true,
+    validate: {
+      validator: function (value) {
+        return this.status !== 'active' || value > new Date()
+      },
+      message: 'Auction closing time must be in the future.',
+    },
+  },
   seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   status: { type: String, enum: ['active', 'awaiting_decision', 'unsold', 'reserved', 'rejected', 'completed', 'failed_pickup', 'seller_cancelled', 'cancelled', 'closed'], default: 'active', index: true },
   bids: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Bid' }], default: [] },
