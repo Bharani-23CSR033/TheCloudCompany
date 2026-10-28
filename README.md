@@ -1,6 +1,6 @@
 # CampusAuction
 
-A Phase 2 MERN campus marketplace for managing item listings within a college community. Bidding is intentionally not implemented yet.
+A Phase 3 MERN campus marketplace for discovering auctions within a college community. Bidding is intentionally not implemented yet.
 
 ## Requirements
 
@@ -50,6 +50,7 @@ Open the Vite URL shown in the terminal. The API health check is available at `h
 - `GET /api/listings` (public active listings; add `?category=Books` to filter)
 - `GET /api/listings?mine=true` (authenticated seller listings)
 - `GET /api/listings/:id`
+- `GET /api/listings/:id/bids` (public, read-only bid history)
 - `PUT /api/listings/:id` (authenticated owner; multipart form)
 - `DELETE /api/listings/:id` (authenticated owner; records `cancelled` status instead of deleting)
 
@@ -58,3 +59,18 @@ Listing fields are `title`, `category`, `description`, `condition`, `startingPri
 Uploaded images are stored as files under `server/uploads/` and only their URL paths are stored in MongoDB. JPEG, PNG, and WebP files are accepted, with a maximum of 6 images and 5 MB per image. The upload directory is served at `/uploads/`; generated uploads are ignored by Git.
 
 Passwords are hashed with bcrypt and are never returned by the API. Bidding and automatic bidding remain intentionally deferred to a later phase.
+
+## Browsing query parameters
+
+`GET /api/listings` supports:
+
+- `q`: searches title and description
+- `category`: Cycle, Calculator, Books, Electronics, or Other
+- `condition`: New, Like New, Good, or Fair
+- `minPrice` and `maxPrice`: non-negative starting-price range
+- `closingSoon=true`: active auctions closing within 24 hours
+- `sort`: `newest`, `lowestPrice`, or `closingSoon`
+- `page`: positive page number (default `1`)
+- `limit`: results per page from 1 to 50 (default `12`)
+
+The response includes `pagination` metadata. Public listing responses expose only the seller's display name, never email, password, or authentication data. Detail responses include public bid history and `currentPrice`; with no valid bids, `currentPrice` equals `startingPrice`. The browser countdown is informational only—the server's stored closing timestamp remains authoritative.

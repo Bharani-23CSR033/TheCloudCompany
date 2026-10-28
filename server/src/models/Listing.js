@@ -14,7 +14,7 @@ const listingSchema = new mongoose.Schema({
   closingAt: { type: Date, required: true, validate: { validator: (value) => value > new Date(), message: 'Auction closing time must be in the future.' } },
   seller: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   status: { type: String, enum: ['active', 'cancelled', 'closed'], default: 'active', index: true },
-  bids: { type: [{ type: mongoose.Schema.Types.ObjectId }], default: [] },
+  bids: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Bid' }], default: [] },
 }, { timestamps: true })
 
 listingSchema.index({ status: 1, closingAt: 1 })
