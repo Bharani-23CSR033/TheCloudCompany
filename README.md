@@ -1,6 +1,6 @@
 # CampusAuction
 
-A Phase 4 MERN campus marketplace for discovering auctions and placing secure bids within a college community.
+A MERN campus marketplace for discovering auctions, placing secure bids and completing campus sales.
 
 ## Requirements
 
@@ -136,3 +136,25 @@ Phase 5 endpoints:
 - `POST /api/listings/:id/seller-cancel` with `{ "reason": "..." }`
 
 Winner and handover details are returned only to the listing seller or confirmed winner. Public listing APIs do not expose private account information.
+
+## Phase 6 notifications
+
+Notifications are persisted in MongoDB and are scoped to the authenticated recipient. The app polls while signed in (every 15 seconds), so notifications update without a page refresh. Browser notifications are optional and are requested only after clicking **Enable browser notifications**; denied or unsupported browser notifications do not disable the in-app bell.
+
+Notification endpoints:
+
+- `GET /api/notifications` (authenticated; optional `limit`, maximum 100)
+- `PATCH /api/notifications/:id/read` (authenticated; only the recipient can mark it read)
+- `PATCH /api/notifications/read-all` (authenticated)
+
+The server creates idempotent notifications for outbids, auction closure, provisional wins, seller approval/rejection, cancellation, completed handover and failed pickup. Each event has a unique key, so retrying the closing worker does not duplicate notifications. Public APIs do not expose notification data or private student details.
+
+## Manual evaluation flow
+
+1. Register two students, create a listing as the first student and place bids as the second.
+2. Verify the first bidder receives an outbid notification, then let the auction close.
+3. Sign in as the seller, approve or reject the provisional winner from **My Auctions**.
+4. For an approved sale, confirm handover from both participants, or record failed pickup/cancellation.
+5. Open the bell to mark notifications read and optionally enable browser notifications.
+
+Known limitation: live MongoDB bidding and lifecycle integration requires MongoDB replica-set mode as documented above. The frontend build and backend syntax checks can run without a database, but end-to-end notification delivery requires a configured MongoDB connection.

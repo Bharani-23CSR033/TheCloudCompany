@@ -6,6 +6,7 @@ import { requireAuth } from '../middleware/auth.js'
 import { optionalAuth } from '../middleware/optionalAuth.js'
 import { uploadImages } from '../middleware/upload.js'
 import { processExpiredAuctions } from '../services/auctionCloser.js'
+import { createNotification } from '../services/notifications.js'
 
 const router = Router()
 const imageUrl = (req, file) => `${req.protocol}://${req.get('host')}/uploads/${file.filename}`
@@ -150,6 +151,7 @@ router.post('/:id/bids', requireAuth, async (req, res, next) => {
         throw error
       }
       const previousPrice = currentPrice(listing)
+      const previousLeader = await Bid.findOne({ listing: listing._id, valid: true }).sort({ amount: -1, createdAt: -1 }).session(session)
       const firstBid = listing.bids.length === 0
       const minimum = firstBid ? listing.startingPrice : previousPrice + listing.minimumBidIncrement
       if (amount < minimum) {
@@ -173,6 +175,16 @@ router.post('/:id/bids', requireAuth, async (req, res, next) => {
       }
       const [bid] = await Bid.create([{ _id: bidId, listing: listing._id, bidder: req.student._id, amount }], { session })
       acceptedBid = bid
+      if (previousLeader && !previousLeader.bidder.equals(req.student._id)) {
+        await createNotification({
+          recipient: previousLeader.bidder,
+          type: 'outbid',
+          message: `You were outbid on "${listing.title}".`,
+          listing: listing._id,
+          eventKey: `outbid:${listing._id}:${bidId}`,
+          session,
+        })
+      }
     })
     res.status(201).json({ bid: serializeBid({ ...acceptedBid.toObject(), bidder: { name: req.student.name } }), currentPrice: amount })
   } catch (error) {
@@ -220,6 +232,13 @@ router.post('/:id/decision', requireAuth, async (req, res, next) => {
       { new: true },
     ).populate('provisionalWinner', 'name').populate('winningBid')
     if (!listing) return res.status(400).json({ message: 'Auction was not found or is no longer awaiting a seller decision.' })
+    await createNotification({
+      recipient: listing.provisionalWinner?._id,
+      type: 'seller_decision',
+      message: decision === 'approve' ? `The seller approved your winning price for "${listing.title}".` : `The seller rejected the winning price for "${listing.title}".`,
+      listing: listing._id,
+      eventKey: `seller-decision:${listing._id}:${decision}`,
+    })
     res.json({ listing: serialize(listing, { includeLifecycle: true }) })
   } catch (error) { next(error) }
 })
@@ -236,6 +255,15 @@ router.post('/:id/handover/confirm', requireAuth, async (req, res, next) => {
     else { listing.handover.buyerConfirmed = true; listing.handover.buyerConfirmedAt = new Date() }
     if (listing.handover.sellerConfirmed && listing.handover.buyerConfirmed) listing.status = 'completed'
     await listing.save()
+    if (listing.status === 'completed') {
+      await createNotification({
+        recipient: isSeller ? listing.provisionalWinner?._id : listing.seller?._id,
+        type: 'handover_completed',
+        message: `Handover for "${listing.title}" is complete.`,
+        listing: listing._id,
+        eventKey: `handover-completed:${listing._id}`,
+      })
+    }
     res.json({ listing: serialize(listing, { includeLifecycle: true }) })
   } catch (error) { next(error) }
 })
@@ -248,6 +276,13 @@ router.post('/:id/handover/fail', requireAuth, async (req, res, next) => {
     if (!req.body.reason?.trim()) return res.status(400).json({ message: 'A failed pickup reason is required.' })
     listing.status = 'failed_pickup'; listing.reservationStatus = 'released'; listing.handover.failedAt = new Date(); listing.handover.failedBy = req.student._id; listing.handover.failedReason = req.body.reason.trim()
     await listing.save()
+    await createNotification({
+      recipient: listing.seller._id.equals(req.student._id) ? listing.provisionalWinner?._id : listing.seller._id,
+      type: 'pickup_failed',
+      message: `Pickup failed for "${listing.title}".`,
+      listing: listing._id,
+      eventKey: `pickup-failed:${listing._id}`,
+    })
     res.json({ listing: serialize(listing, { includeLifecycle: true }) })
   } catch (error) { next(error) }
 })
@@ -260,13 +295,14 @@ router.post('/:id/seller-cancel', requireAuth, async (req, res, next) => {
     if (!req.body.reason?.trim()) return res.status(400).json({ message: 'A cancellation reason is required.' })
     listing.status = 'seller_cancelled'; listing.reservationStatus = 'released'; listing.sellerCancellation = { reason: req.body.reason.trim(), cancelledAt: new Date() }
     await listing.save()
+    await createNotification({ recipient: listing.provisionalWinner?._id, type: 'auction_cancelled', message: `The seller cancelled the reserved sale for "${listing.title}".`, listing: listing._id, eventKey: `auction-cancelled:${listing._id}` })
     res.json({ listing: serialize(listing, { includeLifecycle: true }) })
   } catch (error) { next(error) }
 })
 
 router.put('/:id', requireAuth, handleUpload, async (req, res, next) => {
   try {
-    const listing = await findOwned(req.params.id, req.student._id)
+    const listing = await Listing.findOne({ _id: req.params.id, seller: req.student._id }).populate('bids')
     if (!listing) return res.status(404).json({ message: 'Listing not found or you are not the seller.' })
     if (listing.status !== 'active') return res.status(400).json({ message: 'Only active listings can be edited.' })
     if (listing.bids.length) return res.status(400).json({ message: 'This listing cannot be edited because it already has bids.' })
@@ -282,10 +318,12 @@ router.put('/:id', requireAuth, handleUpload, async (req, res, next) => {
 
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
-    const listing = await findOwned(req.params.id, req.student._id)
+    const listing = await Listing.findOne({ _id: req.params.id, seller: req.student._id }).populate('bids')
     if (!listing) return res.status(404).json({ message: 'Listing not found or you are not the seller.' })
     if (listing.status === 'cancelled') return res.status(400).json({ message: 'Listing is already cancelled.' })
     listing.status = 'cancelled'; await listing.save()
+    const winner = validBids(listing).sort((a, b) => b.amount - a.amount)[0]
+    if (winner) await createNotification({ recipient: winner.bidder, type: 'auction_cancelled', message: `The auction "${listing.title}" was cancelled by the seller.`, listing: listing._id, eventKey: `auction-cancelled-before-close:${listing._id}` })
     res.json({ message: 'Listing cancelled.', listing: serialize(listing) })
   } catch (error) { next(error) }
 })

@@ -7,6 +7,7 @@ import { connectDatabase } from './config/db.js'
 import authRoutes from './routes/auth.js'
 import listingRoutes from './routes/listings.js'
 import { startAuctionCloser } from './services/auctionCloser.js'
+import notificationRoutes from './routes/notifications.js'
 
 const app = express()
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }))
@@ -15,6 +16,7 @@ app.use('/uploads', express.static(path.resolve(path.dirname(fileURLToPath(impor
 app.get('/api/health', (req, res) => res.json({ status: 'ok', message: 'Campus Auction API is running' }))
 app.use('/api/auth', authRoutes)
 app.use('/api/listings', listingRoutes)
+app.use('/api/notifications', notificationRoutes)
 app.use((req, res) => res.status(404).json({ message: 'Route not found.' }))
 app.use((error, req, res, next) => {
   console.error(error)
